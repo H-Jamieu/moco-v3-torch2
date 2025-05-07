@@ -65,11 +65,12 @@ class MoCo(nn.Module):
         q = nn.functional.normalize(q, dim=1)
         k = nn.functional.normalize(k, dim=1)
         # gather all targets
-        k = concat_all_gather(k)
+        #k = concat_all_gather(k)
         # Einstein sum is more intuitive
         logits = torch.einsum('nc,mc->nm', [q, k]) / self.T
         N = logits.shape[0]  # batch size per GPU
-        labels = (torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()).cuda()
+        
+        labels = torch.arange(N, dtype=torch.long, device="cuda:0")
         return nn.CrossEntropyLoss()(logits, labels) * (2 * self.T)
 
     def forward(self, x1, x2, m):
@@ -122,16 +123,23 @@ class MoCo_ViT(MoCo):
         self.predictor = self._build_mlp(2, dim, mlp_dim, dim)
 
 
-# utils
 @torch.no_grad()
 def concat_all_gather(tensor):
     """
     Performs all_gather operation on the provided tensors.
-    *** Warning ***: torch.distributed.all_gather has no gradient.
+    Warning: torch.distributed.all_gather has no gradient.
     """
-    tensors_gather = [torch.ones_like(tensor)
-        for _ in range(torch.distributed.get_world_size())]
-    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
+    if not (dist.is_available() and dist.is_initialized()):
+        # Not in distributed mode or not initialized, return tensor as is
+        return tensor
+
+    world_size = dist.get_world_size()
+    if world_size == 1:
+        # Only one process, no need to gather
+        return tensor
+
+    tensors_gather = [torch.ones_like(tensor) for _ in range(world_size)]
+    dist.all_gather(tensors_gather, tensor, async_op=False)
 
     output = torch.cat(tensors_gather, dim=0)
     return output

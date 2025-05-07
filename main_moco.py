@@ -138,7 +138,7 @@ def main():
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
 
-    args.distributed = args.world_size > 1 or args.multiprocessing_distributed
+    args.distributed = False #args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
     if args.multiprocessing_distributed:
@@ -203,8 +203,8 @@ def main_worker(gpu, ngpus_per_node, args):
             # When using a single GPU per process and per
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
-            args.batch_size = int(args.batch_size / args.world_size)
-            args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
+            #args.batch_size = int(args.batch_size / args.world_size)
+            args.workers = int(args.workers)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         else:
             model.cuda()
@@ -215,10 +215,11 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
         # comment out the following line for debugging
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
+        #raise NotImplementedError("Only DistributedDataParallel is supported.")
     else:
         # AllGather/rank implementation in this code only supports DistributedDataParallel.
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
+        #raise NotImplementedError("Only DistributedDataParallel is supported.")
+        print("=> using CPU, this will be slow")
     print(model) # print model after SyncBatchNorm
 
     if args.optimizer == 'lars':
@@ -229,7 +230,7 @@ def main_worker(gpu, ngpus_per_node, args):
         optimizer = torch.optim.AdamW(model.parameters(), args.lr,
                                 weight_decay=args.weight_decay)
         
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler("cuda") #bf16
     summary_writer = SummaryWriter() if args.rank == 0 else None
 
     # optionally resume from a checkpoint
@@ -254,7 +255,7 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
+    traindir = args.data
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
@@ -349,7 +350,7 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         # compute output
-        with torch.cuda.amp.autocast(True):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16): #bf16 for faster training
             loss = model(images[0], images[1], moco_m)
 
         losses.update(loss.item(), images[0].size(0))
