@@ -17,7 +17,6 @@ import warnings
 from functools import partial
 
 import torch
-import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -51,7 +50,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet50)')
-parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
                     help='number of data loading workers (default: 32)')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -83,7 +82,7 @@ parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
 parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
-parser.add_argument('--gpu', default=None, type=int,
+parser.add_argument('--gpu', default=0, type=int,
                     help='GPU id to use.')
 parser.add_argument('--multiprocessing-distributed', action='store_true',
                     help='Use multi-processing distributed training to launch '
@@ -244,9 +243,20 @@ def main_worker(gpu, ngpus_per_node, args):
                 loc = 'cuda:{}'.format(args.gpu)
                 checkpoint = torch.load(args.resume, map_location=loc)
             args.start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            scaler.load_state_dict(checkpoint['scaler'])
+            state_dict = checkpoint['state_dict']
+            # Remove 'module.' prefix
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith('module.'):
+                    new_state_dict[k[7:]] = v  # Remove 'module.' (7 characters)
+                else:
+                    new_state_dict[k] = v
+            model.load_state_dict(new_state_dict, strict=False)
+            # forec model to gpu
+            if args.gpu is not None:
+                model = model.cuda(args.gpu)
+            #optimizer.load_state_dict(checkpoint['optimizer'])
+            #scaler.load_state_dict(checkpoint['scaler'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -331,7 +341,8 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
 
     # switch to train mode
     model.train()
-
+    # check model on which device
+    print("=> model is on device: {}".format(next(model.parameters()).device))
     end = time.time()
     iters_per_epoch = len(train_loader)
     moco_m = args.moco_m
